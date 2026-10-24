@@ -94,6 +94,17 @@ module LanguageService =
             { start: Fable.Import.VSCode.Vscode.Position
               ``end``: Fable.Import.VSCode.Vscode.Position }
 
+        type LspCommand =
+            { title: string
+              command: string
+              arguments: obj[] option }
+
+        /// CodeLens as sent by FSAC, `data` is `[| documentUri; "signature" | "reference" |]`
+        type LspCodeLens =
+            { range: LspRange
+              command: LspCommand option
+              data: obj }
+
         type TestRunRequest =
             { LimitToProjects: string array option
               TestCaseFilter: string option
@@ -684,6 +695,43 @@ Consider:
             cl.sendRequest ("fsharp/pipelineHint", req)
             |> Promise.map checkNotificationAndCast<PipelineHintsResult>
 
+    /// If true, reference counts are shown as inlay hints at the end of the declaration line instead of as CodeLenses
+    let referenceCodeLensesInline () =
+        "FSharp.codeLenses.references.position" |> Configuration.get "above" = "inline"
+
+    let isReferenceCodeLens (data: obj) =
+        JS.Constructors.Array.isArray data
+        && (unbox<string[]> data).Length > 1
+        && (unbox<string[]> data).[1] = "reference"
+
+    /// Requests the CodeLenses directly, bypassing the CodeLens middleware
+    let codeLenses (uri: Uri) (token: CancellationToken) =
+        match client with
+        | None -> Promise.lift [||]
+        | Some cl ->
+            let req = {| textDocument = {| uri = uri.ToDocumentUri |} |}
+
+            cl.sendRequest ("textDocument/codeLens", req, token)
+            |> Promise.map (fun (lenses: Types.LspCodeLens[]) -> if isNullOrUndefined lenses then [||] else lenses)
+
+    let resolveCodeLens (lens: Types.LspCodeLens) (token: CancellationToken) =
+        match client with
+        | None -> Promise.lift None
+        | Some cl ->
+            cl.sendRequest ("codeLens/resolve", lens, token)
+            |> Promise.map (fun (lens: Types.LspCodeLens) -> if isNullOrUndefined lens then None else Some lens)
+
+    /// Makes VS Code request the CodeLenses again, same as a `workspace/codeLens/refresh` from the server
+    let refreshCodeLenses () =
+        match client with
+        | None -> ()
+        | Some cl ->
+            let feature = cl?getFeature ("textDocument/codeLens")
+
+            if not (isNullOrUndefined feature) then
+                for provider in unbox<seq<obj>> (feature?getAllProviders ()) do
+                    provider?onDidChangeCodeLensEmitter?fire ()
+
     let fsiSdk () =
         promise { return Environment.configFsiSdkFilePath () }
 
@@ -802,6 +850,26 @@ Consider:
             // opts.outputChannel <- Some defaultOutputChannel
             opts.initializationFailedHandler <- Some(!!initializationFailureHandler)
 
+            // When reference counts are shown inline (see CodeLensHelpers) the reference CodeLenses are hidden
+            let provideCodeLenses =
+                System.Func<TextDocument, CancellationToken, System.Func<TextDocument, CancellationToken, obj>, obj>
+                    (fun document token next ->
+                        let lenses = next.Invoke(document, token)
+
+                        if referenceCodeLensesInline () then
+                            Promise.lift lenses
+                            |> Promise.map (fun lenses ->
+                                if isNullOrUndefined lenses then
+                                    lenses
+                                else
+                                    unbox<obj[]> lenses
+                                    |> Array.filter (fun lens -> not (isReferenceCodeLens lens?data))
+                                    |> box)
+                            |> box
+                        else
+                            lenses)
+
+            opts.middleware <- Some(unbox (createObj [ "provideCodeLenses" ==> provideCodeLenses ]))
             opts.initializationOptions <- Some !^(Some initOpts)
             opts?markdown <- createObj [ "isTrusted" ==> true; "supportHtml" ==> true ]
 

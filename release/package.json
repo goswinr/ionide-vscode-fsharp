@@ -477,6 +477,19 @@
           "type": "boolean",
           "default": true
         },
+        "FSharp.codeLenses.references.position": {
+          "markdownDescription": "Where reference counts are shown, if \u0060#FSharp.codeLenses.references.enabled#\u0060 is set.",
+          "type": "string",
+          "default": "above",
+          "enum": [
+            "above",
+            "inline"
+          ],
+          "markdownEnumDescriptions": [
+            "As a code lens above the declaration, e.g. \u00603 References\u0060.",
+            "As an inlay hint at the end of the declaration line, before the LineLens signature, e.g. \u00603 refs\u0060. Ctrl+Click (Cmd+Click on macOS) to peek the references. Requires \u0060#editor.inlayHints.enabled#\u0060."
+          ]
+        },
         "FSharp.codeLenses.signature.enabled": {
           "description": "If enabled, code lenses for type signatures on methods and functions will be shown.",
           "type": "boolean",
